@@ -1,1 +1,2 @@
-python-binance
+    python-binance
+    python-dotenv
