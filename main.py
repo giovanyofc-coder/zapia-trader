@@ -147,6 +147,17 @@ def run_zapia_trader():
     print(f"💰 Banca: R$ {BANCA_TOTAL_BRL} | Ordem: R$ {VALOR_POR_OPERACAO}")
     print(f"📈 Estratégia: Compra em {BUY_THRESHOLD_VAR}% | Venda em +{SELL_THRESHOLD_VAR}%")
     print(f"👀 Monitorando {len(symbols)} pares: {symbols}")
+    
+    # Check minNotional
+    try:
+        info = get_exchange_info()
+        for s_info in info.get('symbols', []):
+            if s_info['symbol'] in symbols:
+                notional = [f for f in s_info['filters'] if f['filterType'] == 'NOTIONAL'][0]
+                print(f"ℹ️ {s_info['symbol']}: minNotional = {notional['minNotional']}")
+    except Exception as e:
+        print(f"⚠️ Erro ao checar minNotional: {e}")
+    
     print(f"⏱️ Intervalo: {CHECK_INTERVAL}s")
 
     while True:
@@ -174,11 +185,13 @@ def run_zapia_trader():
                 elif vagas > 0:
                     if current_price <= s['last_price'] * BUY_THRESHOLD:
                         try:
+                            print(f"DEBUG: Tentando comprar {symbol} com R$ {VALOR_POR_OPERACAO}")
                             client.order_market_buy(symbol=symbol, quoteOrderQty=VALOR_POR_OPERACAO)
                             s['bought_at'] = current_price
                             vagas -= 1
                             print(f"[ZAPIA_EVENTO] COMPRA: {symbol} | Preço: R$ {current_price:.2f}")
                         except Exception as e:
+                            print(f"❌ Erro na compra {symbol}: {e}")
                             pass
 
                 if not s['bought_at'] and current_price > s['last_price']:
