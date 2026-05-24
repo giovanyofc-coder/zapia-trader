@@ -5,6 +5,7 @@ import hashlib
 import requests
 import math
 from binance.client import Client
+from binance.exceptions import BinanceAPIException
 from dotenv import load_dotenv
 
 # Carrega as chaves da Binance
@@ -15,7 +16,7 @@ base_url = "https://api.binance.com"
 
 # Configurações via Environment Variables (com fallbacks)
 BANCA_TOTAL_BRL = float(os.getenv('BANCA_TOTAL_BRL', 40.0))
-VALOR_POR_OPERACAO = float(os.getenv('VALOR_POR_OPERACAO', 13.33))
+VALOR_POR_OPERACAO = float(os.getenv('VALOR_POR_OPERACAO', 20.0))
 
 SELL_THRESHOLD_VAR = float(os.getenv('SELL_THRESHOLD', 1.2))
 BUY_THRESHOLD_VAR = float(os.getenv('BUY_THRESHOLD', -0.05))
@@ -27,53 +28,52 @@ CHECK_INTERVAL = int(os.getenv('CHECK_INTERVAL', 5))
 PAIRS_STR = os.getenv('PAIRS', 'BTCBRL,SOLBRL,ZECBRL')
 symbols = [s.strip() for s in PAIRS_STR.split(',')]
 
+# Tenta inicializar o cliente
+try:
+    client = Client(api_key, api_secret)
+except Exception as e:
+    print(f"❌ ERRO CRÍTICO NA CHAVE: {e}")
+
+def get_price(symbol):
+    try:
+        return float(client.get_symbol_ticker(symbol=symbol)['price'])
+    except:
+        return None
+
 def get_exchange_info():
     try:
-        r = requests.get(f"{base_url}/api/v3/exchangeInfo")
-        return r.json()
+        return client.get_exchange_info()
     except Exception as e:
         print(f"Error fetching exchange info: {e}")
         return {}
 
 def sell_orphans():
-    assets_to_sell = ["DOGE", "ETH", "SOL", "BTC"]
+    assets_to_sell = ["DOGE", "ETH", "SOL", "BTC", "ZEC"]
     print(f"--- 🦾 ZAPIA ORPHAN CLEANUP START ---")
     
-    if not api_key or not api_secret:
-        print("❌ Error: API keys not set.")
-        return
-
-    info = get_exchange_info()
-    if 'symbols' not in info:
-        print(f"❌ Could not get symbols from Binance")
-        return
-        
-    symbols_info = {s['symbol']: s for s in info['symbols']}
-
-    timestamp = int(time.time() * 1000)
-    query = f"timestamp={timestamp}"
-    signature = hmac.new(api_secret.encode('utf-8'), query.encode('utf-8'), hashlib.sha256).hexdigest()
-    
     try:
-        r = requests.get(f"{base_url}/api/v3/account", params={"timestamp": timestamp, "signature": signature}, headers={"X-MBX-APIKEY": api_key})
-        account = r.json()
+        account = client.get_account()
+        info = get_exchange_info()
+        symbols_info = {s['symbol']: s for s in info.get('symbols', [])}
     except Exception as e:
         print(f"❌ Error fetching account: {e}")
         return
     
-    if 'balances' not in account:
-        print(f"❌ Error fetching account details: {account}")
-        return
-
     for asset in assets_to_sell:
+        if asset == 'BRL': continue
         balance_info = next((b for b in account['balances'] if b['asset'] == asset), None)
         if not balance_info: continue
             
         free = float(balance_info['free'])
-        if free <= 0.00000001: continue
+        if free <= 0: continue
             
         symbol = f"{asset}BRL"
         if symbol not in symbols_info: continue
+
+        # Verify if value is significant (> 5 BRL) to avoid dust errors
+        price = get_price(symbol)
+        if not price or (free * price) < 5.0:
+            continue
 
         step_size = 0.00000001
         for f in symbols_info[symbol]['filters']:
@@ -92,47 +92,19 @@ def sell_orphans():
 
         print(f"🔍 Found {free} {asset}. Selling {quantity}...")
         
-        timestamp = int(time.time() * 1000)
-        sell_params = {
-            "symbol": symbol,
-            "side": "SELL",
-            "type": "MARKET",
-            "quantity": f"{quantity:.{precision}f}",
-            "timestamp": timestamp
-        }
-        
-        sell_query = '&'.join([f"{k}={v}" for k, v in sell_params.items()])
-        sell_sig = hmac.new(api_secret.encode('utf-8'), sell_query.encode('utf-8'), hashlib.sha256).hexdigest()
-        
         try:
-            res = requests.post(f"{base_url}/api/v3/order", params={**sell_params, "signature": sell_sig}, headers={"X-MBX-APIKEY": api_key})
-            result = res.json()
+            result = client.order_market_sell(symbol=symbol, quantity=f"{quantity:.{precision}f}")
             if 'orderId' in result:
                 print(f"✅ SUCCESS: Sold {quantity} {asset}")
             else:
                 print(f"❌ FAILED: {result}")
         except Exception as e:
-            print(f"❌ Error: {e}")
+            print(f"❌ Error selling {asset}: {e}")
 
     print("--- 🦾 ZAPIA ORPHAN CLEANUP FINISHED ---")
 
-# Tenta inicializar o cliente
-try:
-    client = Client(api_key, api_secret)
-except Exception as e:
-    print(f"❌ ERRO CRÍTICO NA CHAVE: {e}")
-
-def get_price(symbol):
-    try:
-        return float(client.get_symbol_ticker(symbol=symbol)['price'])
-    except:
-        return None
-
 def run_zapia_trader():
-    # Run cleanup first
-    sell_orphans()
-    
-    print("--- 🦾 ROBÔ ZAPIA TRADER ATUALIZADO ---")
+    print("--- 🦾 ROBÔ ZAPIA TRADER V3 ---")
     
     # Teste de Conexão Real
     try:
@@ -142,39 +114,86 @@ def run_zapia_trader():
         print(f"❌ ERRO DE CONEXÃO: {e}")
         return
 
-    state = {s: {'last_price': get_price(s), 'bought_at': None} for s in symbols}
-    
-    print(f"💰 Banca: R$ {BANCA_TOTAL_BRL} | Ordem: R$ {VALOR_POR_OPERACAO}")
-    print(f"📈 Estratégia: Compra em {BUY_THRESHOLD_VAR}% | Venda em +{SELL_THRESHOLD_VAR}%")
-    print(f"👀 Monitorando {len(symbols)} pares: {symbols}")
-    
-    # Check minNotional
+    # Detection of existing positions
+    print("🔍 Verificando posições abertas...")
+    state = {}
+    for symbol in symbols:
+        asset = symbol.replace('BRL', '')
+        try:
+            balance = float(client.get_asset_balance(asset=asset)['free'])
+            price = get_price(symbol)
+            bought_at = None
+            if price and (balance * price) > 10.0:
+                # Get last buy price from history
+                trades = client.get_my_trades(symbol=symbol, limit=10)
+                for t in reversed(trades):
+                    if t['isBuyer']:
+                        bought_at = float(t['price'])
+                        break
+                print(f"✅ Posição encontrada: {symbol} | Qtd: {balance} | Pago: R$ {bought_at}")
+            
+            state[symbol] = {
+                'last_price': price if price else 0,
+                'bought_at': bought_at
+            }
+        except Exception as e:
+            print(f"⚠️ Erro ao inicializar {symbol}: {e}")
+            state[symbol] = {'last_price': 0, 'bought_at': None}
+
+    # Fetch minNotionals
+    min_notionals = {}
     try:
         info = get_exchange_info()
         for s_info in info.get('symbols', []):
             if s_info['symbol'] in symbols:
                 notional = [f for f in s_info['filters'] if f['filterType'] == 'NOTIONAL'][0]
-                print(f"ℹ️ {s_info['symbol']}: minNotional = {notional['minNotional']}")
+                min_notionals[s_info['symbol']] = float(notional['minNotional'])
+                print(f"ℹ️ {s_info['symbol']}: minNotional = {min_notionals[s_info['symbol']]}")
     except Exception as e:
         print(f"⚠️ Erro ao checar minNotional: {e}")
-    
+
+    print(f"💰 Banca: R$ {BANCA_TOTAL_BRL} | Ordem: R$ {VALOR_POR_OPERACAO}")
+    print(f"📈 Estratégia: Compra em {BUY_THRESHOLD_VAR}% | Venda em +{SELL_THRESHOLD_VAR}%")
     print(f"⏱️ Intervalo: {CHECK_INTERVAL}s")
 
     while True:
         try:
+            # 1. Check current status
             ativas = [s for s in state if state[s]['bought_at'] is not None]
+            
+            # 2. Get BRL Balance
+            try:
+                brl_balance = float(client.get_asset_balance(asset='BRL')['free'])
+            except:
+                brl_balance = 0
+            
+            # Vagas based on banca and current active trades
             vagas = int((BANCA_TOTAL_BRL - (len(ativas) * VALOR_POR_OPERACAO)) // VALOR_POR_OPERACAO)
+            
+            # Don't allow more than total slots even if BRL is high
+            max_vagas = int(BANCA_TOTAL_BRL // VALOR_POR_OPERACAO) - len(ativas)
+            vagas = min(vagas, max_vagas)
+
+            if time.time() % 60 < CHECK_INTERVAL: # Log status every ~minute
+                print(f"--- [STATUS] BRL: {brl_balance:.2f} | Ativas: {len(ativas)} | Vagas: {vagas}")
 
             for symbol in symbols:
                 current_price = get_price(symbol)
                 if not current_price: continue
+                
                 s = state[symbol]
 
+                # LOGIC: SELL
                 if s['bought_at']:
+                    profit = (current_price / s['bought_at']) - 1
                     if current_price >= s['bought_at'] * PROFIT_TARGET:
+                        print(f"🎯 ALVO ATINGIDO: {symbol} | Lucro: {profit*100:.2f}%")
                         try:
                             asset = symbol.replace('BRL', '')
                             balance = float(client.get_asset_balance(asset=asset)['free'])
+                            
+                            # Info for precision
+                            # (Simplified: sell all free balance)
                             client.order_market_sell(symbol=symbol, quantity=balance)
                             print(f"[ZAPIA_EVENTO] VENDA: {symbol} | Preço: R$ {current_price:.2f} | Lucro!")
                             s['bought_at'] = None
@@ -182,20 +201,39 @@ def run_zapia_trader():
                         except Exception as e:
                             print(f"❌ Erro na venda {symbol}: {e}")
 
+                # LOGIC: BUY
                 elif vagas > 0:
-                    if current_price <= s['last_price'] * BUY_THRESHOLD:
+                    if s['last_price'] > 0 and current_price <= s['last_price'] * BUY_THRESHOLD:
+                        # Check if we have enough BRL
+                        amount_to_spend = VALOR_POR_OPERACAO
+                        
+                        # Use available balance if slightly short but above minNotional
+                        min_n = min_notionals.get(symbol, 10.0)
+                        if brl_balance < amount_to_spend:
+                            if brl_balance >= min_n:
+                                amount_to_spend = brl_balance
+                            else:
+                                continue # Not enough BRL for this trade
+
                         try:
-                            print(f"DEBUG: Tentando comprar {symbol} com R$ {VALOR_POR_OPERACAO}")
-                            client.order_market_buy(symbol=symbol, quoteOrderQty=VALOR_POR_OPERACAO)
+                            print(f"🚀 COMPRANDO: {symbol} | Valor: R$ {amount_to_spend:.2f} | Preço: R$ {current_price:.2f}")
+                            client.order_market_buy(symbol=symbol, quoteOrderQty=round(amount_to_spend, 2))
                             s['bought_at'] = current_price
                             vagas -= 1
-                            print(f"[ZAPIA_EVENTO] COMPRA: {symbol} | Preço: R$ {current_price:.2f}")
+                            brl_balance -= amount_to_spend
+                            print(f"[ZAPIA_EVENTO] COMPRA REALIZADA: {symbol}")
+                        except BinanceAPIException as e:
+                            print(f"❌ Erro Binance na compra {symbol}: {e.message}")
+                            if "insufficient balance" in e.message.lower():
+                                # Try to reduce amount slightly for fees?
+                                pass
                         except Exception as e:
-                            print(f"❌ Erro na compra {symbol}: {e}")
-                            pass
+                            print(f"❌ Erro inesperado na compra {symbol}: {e}")
 
-                if not s['bought_at'] and current_price > s['last_price']:
-                    s['last_price'] = current_price
+                # Update trailing price for buying
+                if not s['bought_at']:
+                    if current_price > s['last_price']:
+                        s['last_price'] = current_price
 
             time.sleep(CHECK_INTERVAL)
         except Exception as e:
@@ -203,4 +241,9 @@ def run_zapia_trader():
             time.sleep(60)
 
 if __name__ == "__main__":
+    # Cleanup on start (optional but kept for compatibility with previous version)
+    try:
+        sell_orphans()
+    except:
+        pass
     run_zapia_trader()
