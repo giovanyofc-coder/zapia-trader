@@ -1,0 +1,1 @@
+worker: python sell_orphans.py && python main.py
