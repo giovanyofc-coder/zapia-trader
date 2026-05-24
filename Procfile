@@ -1,1 +1,1 @@
-worker: python sell_orphans.py && python main.py
+worker: python main.py
