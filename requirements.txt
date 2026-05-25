@@ -1,3 +1,4 @@
 python-binance
 python-dotenv
-pandas/numpy
+pandas
+numpy
