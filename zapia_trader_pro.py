@@ -305,23 +305,21 @@ class ZapiaTraderPro:
                 import math
                 info = self.client.get_symbol_info(symbol)
                 
-                # Try MARKET_LOT_SIZE first, then LOT_SIZE
-                lot_filter = next((f for f in info['filters'] if f['filterType'] == 'MARKET_LOT_SIZE'), None)
-                if not lot_filter:
-                    lot_filter = next(f for f in info['filters'] if f['filterType'] == 'LOT_SIZE')
+                # Try LOT_SIZE first (more stable for step_size), then MARKET_LOT_SIZE
+                lot_filter = next((f for f in info['filters'] if f['filterType'] == 'LOT_SIZE'), None)
+                if not lot_filter or float(lot_filter.get('stepSize', 0)) <= 0:
+                    lot_filter = next(f for f in info['filters'] if f['filterType'] == 'MARKET_LOT_SIZE')
                 
                 step_size = float(lot_filter['stepSize'])
                 min_qty = float(lot_filter['minQty'])
                 
-                # Calculate precision safely
-                if step_size < 1:
-                    precision = int(round(-math.log10(step_size)))
-                else:
-                    precision = 0
+                # Calculate precision safely (robust string-based)
+                step_str = lot_filter['stepSize'].rstrip('0')
+                precision = len(step_str.split('.')[1]) if '.' in step_str else 0
                 
                 # More robust formatting using step_size division
                 # This ensures the value is a multiple of step_size
-                safe_qty = math.floor(qty / step_size) * step_size
+                safe_qty = math.floor(round(qty / step_size, 8)) * step_size
                 formatted_qty = "{:0.{}f}".format(safe_qty, precision)
                 
                 # Convert back to float for comparison
