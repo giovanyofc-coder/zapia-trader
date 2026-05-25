@@ -1,7 +1,7 @@
 import os
 import time
 import hmac
-import hashbse0
+import hashlib
 import requests
 import json
 import pandas as pd
@@ -21,7 +21,7 @@ class ZapiaTraderPro:
         self.api_key = os.getenv('BINANCE_API_KEY')
         self.api_secret = os.getenv('BINANCE_API_SECRET')
         
-       # Initialize client
+        # Initialize client
         try:
             self.client = Client(self.api_key or "", self.api_secret or "")
         except Exception as e:
@@ -74,10 +74,11 @@ class ZapiaTraderPro:
                 ticker = self.client.get_symbol_ticker(symbol=symbol)
                 return float(ticker['price'])
             except Exception as e:
-                print(f"➠️ Binance Client Price Error for {symbol}: {e}")
+                print(f"⚠️ Binance Client Price Error for {symbol}: {e}")
         
         # Fallback: Coingecko (for local testing/451 errors)
         try:
+            # Simple fallback for BTC/SOL in BRL
             r = requests.get(f"https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,solana&vs_currencies=brl", timeout=10)
             data = r.json()
             if 'BTC' in symbol.upper(): return float(data['bitcoin']['brl'])
@@ -97,7 +98,7 @@ class ZapiaTraderPro:
                     f"{self.history_days} days ago UTC"
                 )
                 df = pd.DataFrame(klines, columns=[
-                    'timestamp', 'open', 'high', 'low', 'close', 'volume', 
+                    'timestamp', 'open', 'high', 'low', 'close', 'volume',
                     'close_time', 'quote_asset_volume', 'number_of_trades',
                     'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
                 ])
@@ -106,7 +107,7 @@ class ZapiaTraderPro:
             except Exception as e:
                 print(f"⚠️ Binance Client History Error for {symbol}: {e}")
         
-        # Mock Simulated history for Dry Run 
+        # Mock/Simulated history for Dry Run if client fails
         if self.dry_run:
             print(f"📝 Simulating history for {symbol} (Bullish trend)")
             dates = pd.date_range(end=pd.Timestamp.now(), periods=self.history_days)
@@ -116,7 +117,7 @@ class ZapiaTraderPro:
         return None
 
     def analyze_trend(self, symbol):
-        """Techircal Analysis based on history"""
+        """Technical Analysis based on history"""
         df = self.get_history(symbol)
         if df is None or len(df) < 20:
             return "neutral"
