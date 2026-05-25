@@ -135,11 +135,38 @@ class ZapiaTraderPro:
             
         return "neutral"
 
+    def orphan_cleanup(self):
+        """Try to convert small balances (dust) to BRL if they are above minimum notional"""
+        if self.dry_run or not self.client: return
+        
+        print("🧹 Checking for orphan balances (dust)...")
+        try:
+            account = self.client.get_account()
+            for balance in account['balances']:
+                asset = balance['asset']
+                free = float(balance['free'])
+                
+                # If we have something but it's not a primary pair or we don't have an open position
+                if free > 0 and asset != 'BRL':
+                    symbol = f"{asset}BRL"
+                    if symbol not in self.positions:
+                        # Try to sell if value > 10 BRL (standard minimum)
+                        price = self.get_price(symbol)
+                        if price and (free * price) >= 10.5: # 10.5 for safety margin
+                            print(f"🧹 Orphan found: {asset} ({free}). Value: R$ {free*price:.2f}. Cleaning up...")
+                            self.execute_sell(symbol)
+        except Exception as e:
+            print(f"⚠️ Orphan cleanup error: {e}")
+
     def run(self):
         print("🤖 Zapia-Trader PRO: Bot started loop...")
         count = 0
         while True:
             try:
+                # Run orphan cleanup once an hour
+                if count % 360 == 0:
+                    self.orphan_cleanup()
+                
                 for symbol in self.pairs:
                     current_price = self.get_price(symbol)
                     if not current_price: 
@@ -271,10 +298,50 @@ class ZapiaTraderPro:
             if not self.client: return False
             asset = symbol.replace('BRL', '')
             balance = self.client.get_asset_balance(asset=asset)
+            if not balance: return False
             qty = float(balance['free'])
+            
             if qty > 0:
-                order = self.client.order_market_sell(symbol=symbol, quantity=qty)
-                print(f"[ZAPIA_EVENTO] VENDA REALIZADA: {symbol} | Order ID: {order['orderId']}")
+                import math
+                info = self.client.get_symbol_info(symbol)
+                
+                # Try MARKET_LOT_SIZE first, then LOT_SIZE
+                lot_filter = next((f for f in info['filters'] if f['filterType'] == 'MARKET_LOT_SIZE'), None)
+                if not lot_filter:
+                    lot_filter = next(f for f in info['filters'] if f['filterType'] == 'LOT_SIZE')
+                
+                step_size = float(lot_filter['stepSize'])
+                min_qty = float(lot_filter['minQty'])
+                
+                # Calculate precision safely
+                if step_size < 1:
+                    precision = int(round(-math.log10(step_size)))
+                else:
+                    precision = 0
+                
+                # More robust formatting using step_size division
+                # This ensures the value is a multiple of step_size
+                safe_qty = math.floor(qty / step_size) * step_size
+                formatted_qty = "{:0.{}f}".format(safe_qty, precision)
+                
+                # Convert back to float for comparison
+                final_qty = float(formatted_qty)
+                
+                if final_qty < min_qty:
+                    print(f"⚠️ Quantity {final_qty} below minimum {min_qty} for {symbol}")
+                    return False
+                
+                # Double check notional (Market min order is usually 10 BRL)
+                notional_filter = next((f for f in info['filters'] if f['filterType'] in ['MIN_NOTIONAL', 'NOTIONAL']), None)
+                if notional_filter:
+                    min_notional = float(notional_filter.get('minNotional') or notional_filter.get('notional', 0))
+                    price = self.get_price(symbol)
+                    if price and (final_qty * price) < min_notional:
+                        print(f"⚠️ Notional {final_qty * price:.2f} below {min_notional} BRL. Cannot sell {symbol}.")
+                        return False
+                    
+                order = self.client.order_market_sell(symbol=symbol, quantity=formatted_qty)
+                print(f"[ZAPIA_EVENTO] VENDA REALIZADA: {symbol} | Order ID: {order['orderId']} | Qty: {formatted_qty}")
                 return True
             else:
                 print(f"⚠️ No balance to sell for {symbol}")
