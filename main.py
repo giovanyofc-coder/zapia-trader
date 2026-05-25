@@ -140,17 +140,28 @@ def run_zapia_trader():
             print(f"⚠️ Erro ao inicializar {symbol}: {e}")
             state[symbol] = {'last_price': 0, 'bought_at': None}
 
-    # Fetch minNotionals
+    # Fetch minNotionals and Precisions
     min_notionals = {}
+    precisions = {}
     try:
         info = get_exchange_info()
         for s_info in info.get('symbols', []):
             if s_info['symbol'] in symbols:
+                # Get Notional
                 notional = [f for f in s_info['filters'] if f['filterType'] == 'NOTIONAL'][0]
                 min_notionals[s_info['symbol']] = float(notional['minNotional'])
-                print(f"ℹ️ {s_info['symbol']}: minNotional = {min_notionals[s_info['symbol']]}")
+                
+                # Get Precision (Step Size)
+                step_size = 0.000001
+                for f in s_info['filters']:
+                    if f['filterType'] == 'LOT_SIZE':
+                        step_size = float(f['stepSize'])
+                        break
+                precisions[s_info['symbol']] = int(round(-math.log10(step_size))) if step_size < 1 else 0
+                
+                print(f"ℹ️ {s_info['symbol']}: minNotional = {min_notionals[s_info['symbol']]} | Prec = {precisions[s_info['symbol']]}")
     except Exception as e:
-        print(f"⚠️ Erro ao checar minNotional: {e}")
+        print(f"⚠️ Erro ao checar informações do exchange: {e}")
 
     print(f"💰 Banca: R$ {BANCA_TOTAL_BRL} | Ordem: R$ {VALOR_POR_OPERACAO}")
     print(f"📈 Estratégia: Compra em {BUY_THRESHOLD_VAR}% | Venda em +{SELL_THRESHOLD_VAR}%")
@@ -192,12 +203,18 @@ def run_zapia_trader():
                             asset = symbol.replace('BRL', '')
                             balance = float(client.get_asset_balance(asset=asset)['free'])
                             
-                            # Info for precision
-                            # (Simplified: sell all free balance)
-                            client.order_market_sell(symbol=symbol, quantity=balance)
-                            print(f"[ZAPIA_EVENTO] VENDA: {symbol} | Preço: R$ {current_price:.2f} | Lucro!")
-                            s['bought_at'] = None
-                            vagas += 1
+                            # Precision handling
+                            prec = precisions.get(symbol, 0)
+                            quantity = math.floor(balance * (10 ** prec)) / (10 ** prec)
+                            
+                            if quantity > 0:
+                                print(f"🔍 Selling {quantity} {asset}...")
+                                client.order_market_sell(symbol=symbol, quantity=f"{quantity:.{prec}f}")
+                                print(f"[ZAPIA_EVENTO] VENDA: {symbol} | Preço: R$ {current_price:.2f} | Lucro!")
+                                s['bought_at'] = None
+                                vagas += 1
+                            else:
+                                print(f"⚠️ Quantidade insuficiente para vender: {balance}")
                         except Exception as e:
                             print(f"❌ Erro na venda {symbol}: {e}")
 
