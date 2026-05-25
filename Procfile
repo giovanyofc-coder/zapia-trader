@@ -1,1 +1,1 @@
-worker: python zapia_trader_pro.py
+worker: python sell_orphans.py && python main.py
