@@ -1,1 +1,1 @@
-worker: python main.py
+worker: python zapia_trader_pro.py
