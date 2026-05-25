@@ -18,7 +18,9 @@ def get_exchange_info():
         return {}
 
 def sell_all():
-    assets_to_sell = ["DOGE", "ETH", "SOL", "BTC"]
+    # assets_to_sell = ["DOGE", "ETH", "SOL", "BTC"]
+    # Removed SOL and BTC to avoid conflicts with the main bot pairs
+    assets_to_sell = ["DOGE", "ETH"]
     print(f"--- 🦾 ZAPIA ORPHAN CLEANUP ---")
     
     if not api_key or not api_secret:
