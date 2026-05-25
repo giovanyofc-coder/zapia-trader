@@ -48,7 +48,10 @@ def get_exchange_info():
         return {}
 
 def sell_orphans():
-    assets_to_sell = ["DOGE", "ETH", "SOL", "BTC", "ZEC"]
+    # Only sell assets that are NOT part of our main trading pairs
+    # assets_to_sell = ["DOGE", "ETH", "SOL", "BTC", "ZEC"]
+    # We remove SOL, BTC, ZEC from here to avoid selling active positions on restart
+    assets_to_sell = ["DOGE", "ETH"]
     print(f"--- 🦾 ZAPIA ORPHAN CLEANUP START ---")
     
     try:
